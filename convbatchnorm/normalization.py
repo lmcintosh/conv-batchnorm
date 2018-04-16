@@ -5,27 +5,38 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from ..engine import Layer, InputSpec
-from .. import initializers
-from .. import regularizers
-from .. import constraints
-from .. import backend as K
-from ..legacy import interfaces
+from keras.engine import Layer, InputSpec
+from keras import initializers
+from keras import regularizers
+from keras import constraints
+from keras import backend as K
+from keras.legacy import interfaces
 
 
-class BatchNormalization(Layer):
-    """Batch normalization layer (Ioffe and Szegedy, 2014).
+class ConvBatchNormalization(Layer):
+    """Convolutional batch normalization layer.
+
+    Modification of batch normalization (Ioffe and Szegedy, 2014) that
+    performs local spatial normalization while learning a single scale
+    parameter across space for each channel.
 
     Normalize the activations of the previous layer at each batch,
     i.e. applies a transformation that maintains the mean activation
     close to 0 and the activation standard deviation close to 1.
 
     # Arguments
-        axis: Integer, the axis that should be normalized
-            (typically the features axis).
-            For instance, after a `Conv2D` layer with
-            `data_format="channels_first"`,
-            set `axis=1` in `BatchNormalization`.
+        normalization_axis: Iterable of integers, the axis (or axes)
+            that should be normalized. In vanilla batch norm we would
+            typically normalize across batch and spatial dimensions,
+            and so normalization_axis=[0, 2, 3] if `data_format="channels_first"`.
+            If we want local normalization, normalization_axis=[0]
+            performs normalization independently across space.
+        parameter_axis: Iterable of integers, the axis (or axes)
+            that we learn an independent parameter for re-scaling after
+            normalization. This is only applied if scale=True or center=True.
+            In vanilla batch norm, this is typically the features axis).
+            For instance, after a `Conv2D` layer with `data_format="channels_first"`,
+            set `parameter_axis=1` in `ConvBatchNormalization`.
         momentum: Momentum for the moving mean and the moving variance.
         epsilon: Small float added to variance to avoid dividing by zero.
         center: If True, add offset of `beta` to normalized tensor.
@@ -58,7 +69,8 @@ class BatchNormalization(Layer):
 
     @interfaces.legacy_batchnorm_support
     def __init__(self,
-                 axis=-1,
+                 normalization_axis=-1,
+                 parameter_axis=-1,
                  momentum=0.99,
                  epsilon=1e-3,
                  center=True,
@@ -72,9 +84,10 @@ class BatchNormalization(Layer):
                  beta_constraint=None,
                  gamma_constraint=None,
                  **kwargs):
-        super(BatchNormalization, self).__init__(**kwargs)
+        super(ConvBatchNormalization, self).__init__(**kwargs)
         self.supports_masking = True
-        self.axis = axis
+        self.normalization_axis = normalization_axis
+        self.parameter_axis = parameter_axis
         self.momentum = momentum
         self.epsilon = epsilon
         self.center = center
@@ -89,18 +102,25 @@ class BatchNormalization(Layer):
         self.gamma_constraint = constraints.get(gamma_constraint)
 
     def build(self, input_shape):
-        dim = input_shape[self.axis]
+        parameter_dim = [input_shape[axis] for axis in self.parameter_axis]
+        normalization_dim = [input_shape[axis] for axis in self.normalization_axis]
+
         if dim is None:
             raise ValueError('Axis ' + str(self.axis) + ' of '
                              'input tensor should have a defined dimension '
                              'but the layer received an input with shape ' +
                              str(input_shape) + '.')
+        # Input_spec provides other keras layers what shape to expect,
+        # as well as a dictionary mapping integer axes to a specific
+        # dimension value.
         self.input_spec = InputSpec(ndim=len(input_shape),
-                                    axes={self.axis: dim})
-        shape = (dim,)
+                                    axes={axis: dim for axis, dim in zip(
+                                            self.parameter_axis, parameter_dim)})
+        parameter_shape = (*parameter_dim,)
+        normalization_shape = (*normalization_dim,)
 
         if self.scale:
-            self.gamma = self.add_weight(shape=shape,
+            self.gamma = self.add_weight(shape=parameter_shape,
                                          name='gamma',
                                          initializer=self.gamma_initializer,
                                          regularizer=self.gamma_regularizer,
@@ -108,7 +128,7 @@ class BatchNormalization(Layer):
         else:
             self.gamma = None
         if self.center:
-            self.beta = self.add_weight(shape=shape,
+            self.beta = self.add_weight(shape=parameter_shape,
                                         name='beta',
                                         initializer=self.beta_initializer,
                                         regularizer=self.beta_regularizer,
@@ -116,12 +136,12 @@ class BatchNormalization(Layer):
         else:
             self.beta = None
         self.moving_mean = self.add_weight(
-            shape=shape,
+            shape=normalization_shape,
             name='moving_mean',
             initializer=self.moving_mean_initializer,
             trainable=False)
         self.moving_variance = self.add_weight(
-            shape=shape,
+            shape=normalization_shape,
             name='moving_variance',
             initializer=self.moving_variance_initializer,
             trainable=False)
@@ -131,21 +151,34 @@ class BatchNormalization(Layer):
         input_shape = K.int_shape(inputs)
         # Prepare broadcasting shape.
         ndim = len(input_shape)
-        reduction_axes = list(range(len(input_shape)))
-        del reduction_axes[self.axis]
-        broadcast_shape = [1] * len(input_shape)
-        broadcast_shape[self.axis] = input_shape[self.axis]
+        normalization_reduction_axes = list(self.normalization_axis)
+        normalization_broadcast_shape = [1] * len(input_shape)
+        for axis in self.normalization_axis:
+            normalization_broadcast_shape[axis] = input_shape[axis]
+
+        param_reduction_axes = list(self.parameter_axis)
+        param_broadcast_shape = [1] * len(input_shape)
+        for axis in self.parameter_axis:
+            param_broadcast_shape[axis] = input_shape[axis]
 
         # Determines whether broadcasting is needed.
-        needs_broadcasting = (sorted(reduction_axes) != list(range(ndim))[:-1])
+        param_needs_broadcasting = (sorted(
+                    param_reduction_axes) != list(range(ndim))[:-1])
+        normalization_needs_broadcasting = (sorted(
+                    normalization_reduction_axes) != list(range(ndim))[:-1])
 
         def normalize_inference():
-            if needs_broadcasting:
+            if normalization_needs_broadcasting:
                 # In this case we must explicitly broadcast all parameters.
                 broadcast_moving_mean = K.reshape(self.moving_mean,
-                                                  broadcast_shape)
+                                                  normalization_broadcast_shape)
                 broadcast_moving_variance = K.reshape(self.moving_variance,
-                                                      broadcast_shape)
+                                                      normalization_broadcast_shape)
+            else:
+                broadcast_moving_mean = self.moving_mean
+                broadcast_moving_variance = self.moving_variance
+
+            if param_needs_broadcasting:
                 if self.center:
                     broadcast_beta = K.reshape(self.beta, broadcast_shape)
                 else:
@@ -155,21 +188,18 @@ class BatchNormalization(Layer):
                                                 broadcast_shape)
                 else:
                     broadcast_gamma = None
-                return K.batch_normalization(
-                    inputs,
-                    broadcast_moving_mean,
-                    broadcast_moving_variance,
-                    broadcast_beta,
-                    broadcast_gamma,
-                    epsilon=self.epsilon)
+
             else:
-                return K.batch_normalization(
-                    inputs,
-                    self.moving_mean,
-                    self.moving_variance,
-                    self.beta,
-                    self.gamma,
-                    epsilon=self.epsilon)
+                broadcast_beta = self.beta
+                broadcast_gamma = self.gamma
+
+            return K.batch_normalization(
+                inputs,
+                broadcast_moving_mean,
+                broadcast_moving_variance,
+                broadcast_beta,
+                broadcast_gamma,
+                epsilon=self.epsilon)
 
         # If the learning phase is *static* and set to inference:
         if training in {0, False}:
@@ -177,12 +207,12 @@ class BatchNormalization(Layer):
 
         # If the learning is either dynamic, or set to training:
         normed_training, mean, variance = K.normalize_batch_in_training(
-            inputs, self.gamma, self.beta, reduction_axes,
+            inputs, self.gamma, self.beta, normalization_reduction_axes,
             epsilon=self.epsilon)
 
         if K.backend() != 'cntk':
             sample_size = K.prod([K.shape(inputs)[axis]
-                                  for axis in reduction_axes])
+                                  for axis in normalization_reduction_axes])
             sample_size = K.cast(sample_size, dtype=K.dtype(inputs))
 
             # sample variance - unbiased estimator of population variance
@@ -203,7 +233,8 @@ class BatchNormalization(Layer):
 
     def get_config(self):
         config = {
-            'axis': self.axis,
+            'normalization_axis': self.normalization_axis,
+            'parameter_axis': self.parameter_axis,
             'momentum': self.momentum,
             'epsilon': self.epsilon,
             'center': self.center,
@@ -217,7 +248,7 @@ class BatchNormalization(Layer):
             'beta_constraint': constraints.serialize(self.beta_constraint),
             'gamma_constraint': constraints.serialize(self.gamma_constraint)
         }
-        base_config = super(BatchNormalization, self).get_config()
+        base_config = super(ConvBatchNormalization, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     def compute_output_shape(self, input_shape):
