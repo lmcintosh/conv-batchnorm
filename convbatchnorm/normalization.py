@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Normalization layers.
 """
 from __future__ import absolute_import
@@ -105,11 +104,17 @@ class ConvBatchNormalization(Layer):
         parameter_dim = [input_shape[axis] for axis in self.parameter_axis]
         normalization_dim = [input_shape[axis] for axis in self.normalization_axis]
 
-        if dim is None:
-            raise ValueError('Axis ' + str(self.axis) + ' of '
-                             'input tensor should have a defined dimension '
+        if parameter_dim is None:
+            raise ValueError('Parameter axis ' + str(self.parameter_axis) + 
+                            ' of input tensor should have a defined dimension '
                              'but the layer received an input with shape ' +
                              str(input_shape) + '.')
+        if normalization_dim is None:
+            raise ValueError('Normalization axis ' + str(self.normalization_axis) +
+                             ' of input tensor should have a defined dimension '
+                             'but the layer received an input with shape ' +
+                             str(input_shape) + '.')
+
         # Input_spec provides other keras layers what shape to expect,
         # as well as a dictionary mapping integer axes to a specific
         # dimension value.
