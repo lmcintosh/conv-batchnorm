@@ -1,4 +1,4 @@
-# conv-batchnorm
+# Convolutional Batch Normalization
 Convolutional batch normalization for computing local gain normalization with translation invariant parameters.
 
 This package implements a convolutional batch normalization layer for neural network models in Keras.
