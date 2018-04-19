@@ -245,8 +245,6 @@ class ConvBatchNormalization(Layer):
             'epsilon': self.epsilon,
             'center': self.center,
             'scale': self.scale,
-            'broadcast_beta': self.broadcast_beta,
-            'broadcast_gamma': self.broadcast_gamma,
             'beta_initializer': initializers.serialize(self.beta_initializer),
             'gamma_initializer': initializers.serialize(self.gamma_initializer),
             'moving_mean_initializer': initializers.serialize(self.moving_mean_initializer),
