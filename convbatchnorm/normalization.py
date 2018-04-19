@@ -25,15 +25,16 @@ class ConvBatchNormalization(Layer):
 
     # Arguments
         normalization_axis: Iterable of integers, the axis (or axes)
-            that should be normalized. In vanilla batch norm we would
-            typically normalize across batch and spatial dimensions,
-            and so normalization_axis=[0, 2, 3] if `data_format="channels_first"`.
-            If we want local normalization, normalization_axis=[0]
-            performs normalization independently across space.
+            that we independently normalize. In vanilla batch norm we typically
+            collapse batch and spatial dimensions, and in which case
+            normalization_axis=[1] if `data_format="channels_first"`.
+            If we want local normalization, normalization_axis=[1, 2, 3]
+            performs normalization independently across space, computing
+            statistics just over the batch dimension.
         parameter_axis: Iterable of integers, the axis (or axes)
-            that we learn an independent parameter for re-scaling after
-            normalization. This is only applied if scale=True or center=True.
-            In vanilla batch norm, this is typically the features axis).
+            that we learn independent parameters for centering and scaling after
+            normalization. This only applies if scale=True or center=True.
+            In vanilla batch norm, this is typically the features axis.
             For instance, after a `Conv2D` layer with `data_format="channels_first"`,
             set `parameter_axis=1` in `ConvBatchNormalization`.
         momentum: Momentum for the moving mean and the moving variance.
@@ -122,7 +123,9 @@ class ConvBatchNormalization(Layer):
                                     axes={axis: dim for axis, dim in zip(
                                             self.parameter_axis, parameter_dim)})
         parameter_shape = (*parameter_dim,)
+        print('Parameter shape is {}.'.format(parameter_shape))
         normalization_shape = (*normalization_dim,)
+        print('Normalization shape is {}.'.format(normalization_shape))
 
         if self.scale:
             self.gamma = self.add_weight(shape=parameter_shape,
@@ -156,12 +159,12 @@ class ConvBatchNormalization(Layer):
         input_shape = K.int_shape(inputs)
         # Prepare broadcasting shape.
         ndim = len(input_shape)
-        normalization_reduction_axes = list(self.normalization_axis)
+        normalization_reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.normalization_axis]
         normalization_broadcast_shape = [1] * len(input_shape)
         for axis in self.normalization_axis:
             normalization_broadcast_shape[axis] = input_shape[axis]
 
-        param_reduction_axes = list(self.parameter_axis)
+        param_reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.parameter_axis]
         param_broadcast_shape = [1] * len(input_shape)
         for axis in self.parameter_axis:
             param_broadcast_shape[axis] = input_shape[axis]
@@ -185,12 +188,12 @@ class ConvBatchNormalization(Layer):
 
             if param_needs_broadcasting:
                 if self.center:
-                    broadcast_beta = K.reshape(self.beta, broadcast_shape)
+                    broadcast_beta = K.reshape(self.beta, param_broadcast_shape)
                 else:
                     broadcast_beta = None
                 if self.scale:
                     broadcast_gamma = K.reshape(self.gamma,
-                                                broadcast_shape)
+                                                param_broadcast_shape)
                 else:
                     broadcast_gamma = None
 
