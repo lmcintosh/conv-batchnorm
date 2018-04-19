@@ -133,6 +133,8 @@ class ConvBatchNormalization(Layer):
                                          initializer=self.gamma_initializer,
                                          regularizer=self.gamma_regularizer,
                                          constraint=self.gamma_constraint)
+            self.broadcast_gamma = K.expand_dims(K.expand_dims(
+                        self.gamma)) * K.ones(normalization_shape)
         else:
             self.gamma = None
         if self.center:
@@ -141,8 +143,11 @@ class ConvBatchNormalization(Layer):
                                         initializer=self.beta_initializer,
                                         regularizer=self.beta_regularizer,
                                         constraint=self.beta_constraint)
+            self.broadcast_beta = K.expand_dims(K.expand_dims(
+                        self.beta)) * K.ones(normalization_shape)
         else:
             self.beta = None
+
         self.moving_mean = self.add_weight(
             shape=normalization_shape,
             name='moving_mean',
@@ -157,57 +162,50 @@ class ConvBatchNormalization(Layer):
 
     def call(self, inputs, training=None):
         input_shape = K.int_shape(inputs)
+
         # Prepare broadcasting shape.
         ndim = len(input_shape)
-        normalization_reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.normalization_axis]
-        normalization_broadcast_shape = [1] * len(input_shape)
+        reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.normalization_axis]
+        broadcast_shape = [1] * len(input_shape)
         for axis in self.normalization_axis:
-            normalization_broadcast_shape[axis] = input_shape[axis]
-
-        param_reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.parameter_axis]
-        param_broadcast_shape = [1] * len(input_shape)
-        for axis in self.parameter_axis:
-            param_broadcast_shape[axis] = input_shape[axis]
+            broadcast_shape[axis] = input_shape[axis]
 
         # Determines whether broadcasting is needed.
-        param_needs_broadcasting = (sorted(
-                    param_reduction_axes) != list(range(ndim))[:-1])
-        normalization_needs_broadcasting = (sorted(
-                    normalization_reduction_axes) != list(range(ndim))[:-1])
+        needs_broadcasting = (sorted(
+                    reduction_axes) != list(range(ndim))[:-1])
 
         def normalize_inference():
-            if normalization_needs_broadcasting:
+            if needs_broadcasting:
                 # In this case we must explicitly broadcast all parameters.
                 broadcast_moving_mean = K.reshape(self.moving_mean,
-                                                  normalization_broadcast_shape)
+                                                  broadcast_shape)
                 broadcast_moving_variance = K.reshape(self.moving_variance,
-                                                      normalization_broadcast_shape)
-            else:
-                broadcast_moving_mean = self.moving_mean
-                broadcast_moving_variance = self.moving_variance
-
-            if param_needs_broadcasting:
+                                                      broadcast_shape)
                 if self.center:
-                    broadcast_beta = K.reshape(self.beta, param_broadcast_shape)
+                    broadcast_beta = K.reshape(self.broadcast_beta, broadcast_shape)
                 else:
                     broadcast_beta = None
                 if self.scale:
-                    broadcast_gamma = K.reshape(self.gamma,
-                                                param_broadcast_shape)
+                    broadcast_gamma = K.reshape(self.broadcast_gamma,
+                                                broadcast_shape)
                 else:
                     broadcast_gamma = None
-
+                return K.batch_normalization(
+                    inputs,
+                    broadcast_moving_mean,
+                    broadcast_moving_variance,
+                    broadcast_beta,
+                    broadcast_gamma,
+                    epsilon=self.epsilon)
             else:
-                broadcast_beta = self.beta
-                broadcast_gamma = self.gamma
+                return K.batch_normalization(
+                    inputs,
+                    self.moving_mean,
+                    self.moving_variance,
+                    self.broadcast_beta,
+                    self.broadcast_gamma,
+                    epsilon=self.epsilon)
 
-            return K.batch_normalization(
-                inputs,
-                broadcast_moving_mean,
-                broadcast_moving_variance,
-                broadcast_beta,
-                broadcast_gamma,
-                epsilon=self.epsilon)
 
         # If the learning phase is *static* and set to inference:
         if training in {0, False}:
@@ -215,12 +213,12 @@ class ConvBatchNormalization(Layer):
 
         # If the learning is either dynamic, or set to training:
         normed_training, mean, variance = K.normalize_batch_in_training(
-            inputs, self.gamma, self.beta, normalization_reduction_axes,
+            inputs, self.broadcast_gamma, self.broadcast_beta, reduction_axes,
             epsilon=self.epsilon)
 
         if K.backend() != 'cntk':
             sample_size = K.prod([K.shape(inputs)[axis]
-                                  for axis in normalization_reduction_axes])
+                                  for axis in reduction_axes])
             sample_size = K.cast(sample_size, dtype=K.dtype(inputs))
 
             # sample variance - unbiased estimator of population variance
@@ -247,6 +245,8 @@ class ConvBatchNormalization(Layer):
             'epsilon': self.epsilon,
             'center': self.center,
             'scale': self.scale,
+            'broadcast_beta': self.broadcast_beta,
+            'broadcast_gamma': self.broadcast_gamma,
             'beta_initializer': initializers.serialize(self.beta_initializer),
             'gamma_initializer': initializers.serialize(self.gamma_initializer),
             'moving_mean_initializer': initializers.serialize(self.moving_mean_initializer),
