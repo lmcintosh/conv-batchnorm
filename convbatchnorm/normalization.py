@@ -11,6 +11,8 @@ from keras import constraints
 from keras import backend as K
 from keras.legacy import interfaces
 
+__all__ = ['ConvBatchNormalization']
+
 
 class ConvBatchNormalization(Layer):
     """Convolutional batch normalization layer.
