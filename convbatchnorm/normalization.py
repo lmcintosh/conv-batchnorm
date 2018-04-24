@@ -337,7 +337,7 @@ class ConvAdaptiveNormalization(Layer):
                  beta_constraint=None,
                  gamma_constraint=None,
                  **kwargs):
-        super(ConvBatchNormalization, self).__init__(**kwargs)
+        super(ConvAdaptiveNormalization, self).__init__(**kwargs)
         self.supports_masking = True
         self.normalization_axis = normalization_axis
         self.parameter_axis = parameter_axis
