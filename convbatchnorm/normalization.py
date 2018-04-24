@@ -381,6 +381,7 @@ class ConvAdaptiveNormalization(Layer):
                                     axes={axis: dim for axis, dim in zip(
                                             self.parameter_axis, parameter_dim)})
         parameter_shape = (*parameter_dim,)
+        print('Using adaptive normalization with kernel size {}.'.format(self.kernel_size))
         print('Parameter shape is {}.'.format(parameter_shape))
         normalization_shape = (*normalization_dim,)
         print('Normalization shape is {}.'.format(normalization_shape))
