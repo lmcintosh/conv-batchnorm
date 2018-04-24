@@ -303,6 +303,9 @@ class ConvAdaptiveNormalization(Layer):
             When the next layer is linear (also e.g. `nn.relu`),
             this can be disabled since the scaling
             will be done by the next layer.
+        kernel_size: 2-D tuple indicating the size of the local
+            neighborhood that mean and variance are calculated over.
+        data_format: string; 'channels_first' or 'channels_last'.
         beta_initializer: Initializer for the beta weight.
         gamma_initializer: Initializer for the gamma weight.
         beta_regularizer: Optional regularizer for the beta weight.
@@ -330,6 +333,8 @@ class ConvAdaptiveNormalization(Layer):
                  epsilon=1e-3,
                  center=True,
                  scale=True,
+                 kernel_size=(1, 1),
+                 data_format='channels_first',
                  beta_initializer='zeros',
                  gamma_initializer='ones',
                  beta_regularizer=None,
@@ -345,6 +350,8 @@ class ConvAdaptiveNormalization(Layer):
         self.epsilon = epsilon
         self.center = center
         self.scale = scale
+        self.kernel_size = kernel_size
+        self.data_format = data_format
         self.beta_initializer = initializers.get(beta_initializer)
         self.gamma_initializer = initializers.get(gamma_initializer)
         self.beta_regularizer = regularizers.get(beta_regularizer)
@@ -407,14 +414,22 @@ class ConvAdaptiveNormalization(Layer):
         # Prepare broadcasting shape.
         ndim = len(input_shape)
         reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.normalization_axis]
+        
+        mean = K.mean(inputs, axis=reduction_axes, keepdims=True)
+        pooled_mean = K.pool2d(mean, self.kernel_size, padding='same',
+                               pool_mode='avg', data_format=self.data_format)
+        var = K.mean(K.pow(inputs - pooled_mean, 2), 
+                     axis=reduction_axes, keepdims=True)
+        pooled_var = K.pool2d(var, self.kernel_size, padding='same',
+                              pool_mode='avg', data_format=self.data_format)
 
-        # We normalize the batch by the mean and variance regardless of
-        # train vs test.
-        normed_batch, mean, variance = K.normalize_batch_in_training(
-            inputs, self.broadcast_gamma, self.broadcast_beta, reduction_axes,
-            epsilon=self.epsilon)
-
-        return normed_batch
+        return K.batch_normalization(
+                    inputs,
+                    pooled_mean,
+                    pooled_var,
+                    self.broadcast_beta,
+                    self.broadcast_gamma,
+                    epsilon=self.epsilon)
 
 
     def get_config(self):
@@ -425,6 +440,8 @@ class ConvAdaptiveNormalization(Layer):
             'epsilon': self.epsilon,
             'center': self.center,
             'scale': self.scale,
+            'kernel_size': self.kernel_size,
+            'data_format': self.data_format,
             'beta_initializer': initializers.serialize(self.beta_initializer),
             'gamma_initializer': initializers.serialize(self.gamma_initializer),
             'beta_regularizer': regularizers.serialize(self.beta_regularizer),
