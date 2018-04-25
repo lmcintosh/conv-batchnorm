@@ -417,11 +417,11 @@ class ConvAdaptiveNormalization(Layer):
         reduction_axes = [ax for ax in range(len(input_shape)) if ax not in self.normalization_axis]
         
         mean = K.mean(inputs, axis=reduction_axes, keepdims=True)
-        pooled_mean = K.pool2d(mean, self.kernel_size, padding='same',
+        pooled_mean = K.pool2d(mean, tuple(self.kernel_size), padding='same',
                                pool_mode='avg', data_format=self.data_format)
         var = K.mean(K.pow(inputs - pooled_mean, 2), 
                      axis=reduction_axes, keepdims=True)
-        pooled_var = K.pool2d(var, self.kernel_size, padding='same',
+        pooled_var = K.pool2d(var, tuple(self.kernel_size), padding='same',
                               pool_mode='avg', data_format=self.data_format)
 
         return K.batch_normalization(
